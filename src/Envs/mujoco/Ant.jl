@@ -25,19 +25,18 @@ function init!(n::Integer=1)
 end
 
 function setstate(env::AntEnv)
-    temp = MultiShape(simstate = statespace(env.sim))
-    setstate!(env.sim, temp)
+    temp = env.sim.d
     return vcat(temp.qpos,temp.qvel)
 end
 
 function getobs(env::AntEnv)
-    return vcat(env.sim.d.qpos[3:length(env.sim.d.qpos)], env.sim.d.qvel, flatten(clamp(env.sim.d.xfrc_applied,-1,1)))
+    return vcat(env.sim.d.qpos[3:length(env.sim.d.qpos)], env.sim.d.qvel, Iterators.flatten(clamp.(env.sim.d.xfrc_applied,-1,1)))
 end
 
 function forward!(env::AntEnv, action)
     env.sim.d.ctrl[:] = action
-    for _ in range(env.skip_frame)
-        step!(env.sim)
+    for _ in range(1,stop=env.skip_frame)
+        LyceumBase.step!(env.sim)
     end
 end
 
@@ -46,15 +45,15 @@ end
 function step!(env::AntEnv, action)
     @assert action ∈ env.action_space "$action in $(env.action_space) invalid"
     xposbefore = torso_x(env)
-    forward!(env)
+    forward!(env, action)
     xposafter = torso_x(env)
     forward_reward = (xposafter-xposbefore)/(env.skip_frame)
     ctrl_cost = 0.5 * sum(action.^2)
-    contact_cost = 0.5 * 1e-3 * sum((clamp(env.sim.d.xfrc_applied,-1,1)).^2)
+    contact_cost = 0.5 * 1e-3 * sum(clamp.(env.sim.d.xfrc_applied,-1,1).^2)
     survive_reward = 1.0
     reward = forward_reward - ctrl_cost - contact_cost + survive_reward
     env.state[:] = setstate(env)
-    done = -(all(isfinite.(env.state)) && env.state[3] >=0.2 && env.state[3] <=1.0)
+    done = !(all(isfinite.(env.state)) && env.state[3] >=0.2 && env.state[3] <=1.0)
     ob = getobs(env)
     return ob, reward, done, Dict()
 end
@@ -66,3 +65,14 @@ function reset!(env::AntEnv)
 end
 
 Base.show(io::IO, env::AntEnv) = print(io, "AntEnv")
+
+env = init!()
+actions = [Space.sample(env.action_space) for i=1:1000]
+i = 1
+done = false
+reset!(env)
+while i <= length(actions) && !done
+    global i, done
+    a, b, done, d = step!(env, actions[i])
+    i += 1
+end
