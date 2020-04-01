@@ -1,7 +1,7 @@
 module Gym
 
 using Flux
-using Flux.Tracker
+#using Flux.Tracker
 
 #Spaces
 include("Spaces/Space.jl")
