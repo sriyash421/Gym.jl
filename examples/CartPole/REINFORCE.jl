@@ -2,7 +2,7 @@ using Flux, Gym
 using Flux.Optimise: Optimiser
 using Statistics: mean, norm
 using DataStructures: CircularBuffer
-using Distributions: sample
+using StatsBase
 using Printf
 using CuArrays
 using Random
@@ -16,34 +16,36 @@ ACTION_SIZE = length(env._env.action_space)
 γ = 0.9
 MAX_NUM_STEPS = 10000
 MAX_EPSIODES = 5000
-η = 3e-4
+η = 3f-4   # Learning rate
+η_decay = 1
 
 model = Chain(Dense(STATE_SIZE, 128, relu),Dense(128, ACTION_SIZE)) |> gpu
-opt = Optimiser(Adam(η))
+opt = Optimiser(ADAM(η), InvDecay(η_decay))
 
-function get_action (state)
+function get_action(state)
     global model
     global ACTION_SIZE
-    probs = model(state |> gpu)
-    highest_prob_action = sample(Array(range(0,length=ACTION_SIZE)),Weights(probs) |>cpu) 
+    probs = softmax(model(state |> gpu))
+    highest_prob_action = StatsBase.sample(Array(range(1,length=ACTION_SIZE)),Weights(probs), 1)[1]
     log_prob = log(probs[highest_prob_action])
     return highest_prob_action, log_prob
 end
 
 function update_policy(rewards, log_probs)
     discounted_rewards = []
-    for i in range(0,length=length(rewards))
+    for i in range(1,length=length(rewards))
         Gt = 0f0
         pw = 0
-        for r in rewards[i:]
+        for r in rewards[i:length(rewards)]
             Gt += (γ^pw)*r
             pw += 1
         end
         push!(discounted_rewards, Gt)
     end
-    discounted_rewards = (discounted_rewards - mean(discounted_rewards))/(norm(discounted_rewards))
+    discounted_rewards = (discounted_rewards .- mean(discounted_rewards))/(norm(discounted_rewards))
     score = sum(-log_probs.*discounted_rewards)
-    Flux.train!((), params(model),score , opt)
+    policy_gradient = gradient(()->score, params(model))
+    Flux.update!(opt, params(model), policy_gradient)
 end
 
 function episode!(train=true, draw=false)
@@ -72,11 +74,11 @@ scores = CircularBuffer{Float32}(100)
 while true
   global e
   reset!(env)
-  total_reward = episode!(env)
+  total_reward = episode!()
   push!(scores, total_reward)
   print("Episode: $e | Score: $total_reward ")
   last_100_mean = mean(scores)
-  print("Last 100 episodes mean score: $(@sprintf "%6.2f" last_100_mean)")
+  println("Last 100 episodes mean score: $(@sprintf "%6.2f" last_100_mean)")
   if last_100_mean > 195
     println("\nCartPole-v0 solved!")
     break
